@@ -43,20 +43,43 @@ const CongratulationScreen = () => {
         return;
       }
 
-      // Get the latest user data from API
+      // Get user data from API
       try {
         const response = await fetch(`${API_URL}/api/user/${currentUserEmail}`);
         if (response.ok) {
           const userData = await response.json();
           console.log('Latest user data from API:', userData);
           if (userData && userData.availableBalance !== undefined) {
+            // Set from API
             setBuyingPower(userData.availableBalance);
+            
+            // ALSO update the robinhoodUser in AsyncStorage to ensure both screens use the same value
+            const robinhoodUserStr = await AsyncStorage.getItem('robinhoodUser');
+            if (robinhoodUserStr) {
+              const robinhoodUser = JSON.parse(robinhoodUserStr);
+              robinhoodUser.buyingPower = userData.availableBalance;
+              await AsyncStorage.setItem('robinhoodUser', JSON.stringify(robinhoodUser));
+            }
           }
         } else {
           console.error('Failed to fetch user data from API');
+          
+          // Fallback to AsyncStorage
+          const robinhoodUserStr = await AsyncStorage.getItem('robinhoodUser');
+          if (robinhoodUserStr) {
+            const robinhoodUser = JSON.parse(robinhoodUserStr);
+            setBuyingPower(robinhoodUser.buyingPower || 0);
+          }
         }
       } catch (error) {
         console.error('Error fetching user data from API:', error);
+        
+        // Fallback to AsyncStorage
+        const robinhoodUserStr = await AsyncStorage.getItem('robinhoodUser');
+        if (robinhoodUserStr) {
+          const robinhoodUser = JSON.parse(robinhoodUserStr);
+          setBuyingPower(robinhoodUser.buyingPower || 0);
+        }
       }
 
       // Get user's first name
@@ -160,16 +183,39 @@ const CongratulationScreen = () => {
   };
 
   const handleBuyMore = () => {
-    navigation.navigate('Allocation', {
-      portfolio: {
-        name: 'AlphaFlex Portfolio',
-        image: require('../../assets/alpha.png'),
-      },
-      currentInvestment: {
-        totalInvested,
-        holdings: currentHoldings
-      }
-    });
+    // Show reauthentication alert
+    Alert.alert(
+      "Authentication Required",
+      "For security reasons, we need to verify your identity before proceeding with additional investments.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel"
+        },
+        {
+          text: "Continue",
+          onPress: async () => {
+            try {
+              // Clear the existing Robinhood auth data to force login
+              await AsyncStorage.removeItem('robinhoodAuthData');
+              
+              // Store the current investment state so we can retrieve it after login
+              await AsyncStorage.setItem('pendingInvestmentState', JSON.stringify({
+                totalInvested,
+                holdings: currentHoldings,
+                timestamp: new Date().toISOString()
+              }));
+              
+              // Just navigate to RobinhoodLogin - it will handle the flow to Allocation
+              navigation.navigate('RobinhoodLogin');
+            } catch (error) {
+              console.error('Error preparing for reauthentication:', error);
+              Alert.alert('Error', 'Something went wrong. Please try again.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const clearAllStorageData = async () => {
@@ -264,10 +310,15 @@ const CongratulationScreen = () => {
   };
 
   const calculateCurrentValue = () => {
-    return currentHoldings.reduce((total, holding) => {
-      const allocationAmount = calculateAllocation(holding['Stock Allocation Weight (%)']);
-      return total + allocationAmount;
-    }, 0);
+    // If there are no holdings, the current value is 0
+    if (!currentHoldings || currentHoldings.length === 0) {
+      return 0;
+    }
+    
+    // Apply any performance changes to the total invested
+    // This simulates how the actual stocks would perform in the real market
+    const performanceMultiplier = 1 + (performanceChange / 100);
+    return totalInvested * performanceMultiplier;
   };
 
   const calculateReturn = () => {
@@ -302,6 +353,8 @@ const CongratulationScreen = () => {
             <Text style={styles.cardValue}>${calculateCurrentValue().toFixed(2)}</Text>
           </View>
 
+          <View style={[styles.cardRow, styles.cardDivider]} />
+
           <View style={styles.cardRow}>
             <Text style={styles.cardLabel}>Return (%)</Text>
             <Text style={[
@@ -310,13 +363,6 @@ const CongratulationScreen = () => {
             ]}>
               {parseFloat(calculateReturn()) >= 0 ? '+' : ''}{calculateReturn()}%
             </Text>
-          </View>
-
-          <View style={[styles.cardRow, styles.cardDivider]} />
-
-          <View style={styles.cardRow}>
-            <Text style={styles.cardLabel}>Buying Power</Text>
-            <Text style={styles.cardValue}>${buyingPower.toFixed(2)}</Text>
           </View>
         </View>
       </LinearGradient>
